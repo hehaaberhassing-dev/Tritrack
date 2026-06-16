@@ -67,31 +67,88 @@ function paceText(c) {
   return fmtDur(pace) + " /km";
 }
 
-/* ============================== Store ============================== */
+/* ============================== Store (multi-profile) ==============================
+   Each person who uses this browser gets their own profile. Data lives only in
+   this device's localStorage and is never uploaded — so on someone else's phone
+   or laptop they automatically see only their own data. Profiles add separation
+   when several people share ONE browser. */
 
-const STORAGE_KEY = "tritrack-data";
+const LEGACY_KEY = "tritrack-data";          // single-profile key from before profiles existed
+const PROFILES_KEY = "tritrack:profiles";    // [{ id, name }]
+const CURRENT_KEY = "tritrack:current";       // active profile id
+const dataKey = (id) => `tritrack:data:${id}`;
+
 let state = null;
+let profiles = [];
+let currentId = null;
+
+const currentProfile = () => profiles.find((p) => p.id === currentId) || profiles[0];
 
 function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (currentId) localStorage.setItem(dataKey(currentId), JSON.stringify(state));
 }
 
-function load() {
+function saveProfiles() {
+  localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+  localStorage.setItem(CURRENT_KEY, currentId);
+}
+
+/* Keep older saves working: refresh the plan to the personal program without
+   touching logged runs/workouts. */
+function migratePlan(snap) {
+  if (!snap.planVersion || snap.planVersion < PLAN_VERSION) {
+    snap.plan = generatePlan();
+    snap.planStartDate = PLAN_START_DEFAULT;
+    snap.planVersion = PLAN_VERSION;
+  }
+  return snap;
+}
+
+function readData(id) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(dataKey(id));
     if (!raw) return null;
     const snap = JSON.parse(raw);
     if (!snap || !Array.isArray(snap.exercises)) return null;
-    // Migrate older saves to the personal hybrid program (keeps all logged data)
-    if (!snap.planVersion || snap.planVersion < PLAN_VERSION) {
-      snap.plan = generatePlan();
-      snap.planStartDate = PLAN_START_DEFAULT;
-      snap.planVersion = PLAN_VERSION;
-    }
-    return snap;
+    return migratePlan(snap);
   } catch {
     return null;
   }
+}
+
+function initProfiles() {
+  try {
+    const rawProfiles = localStorage.getItem(PROFILES_KEY);
+    if (rawProfiles) {
+      profiles = JSON.parse(rawProfiles) || [];
+      currentId = localStorage.getItem(CURRENT_KEY);
+      if (!profiles.length) profiles = [{ id: uid(), name: "Me" }];
+      if (!currentId || !profiles.some((p) => p.id === currentId)) currentId = profiles[0].id;
+      state = readData(currentId) || seed();
+    } else {
+      // First launch on the profile-aware version: adopt any pre-existing
+      // single-profile data so nothing is lost.
+      const id = uid();
+      profiles = [{ id, name: "Me" }];
+      currentId = id;
+      let legacy = null;
+      try {
+        const raw = localStorage.getItem(LEGACY_KEY);
+        if (raw) {
+          const s = JSON.parse(raw);
+          if (s && Array.isArray(s.exercises)) legacy = migratePlan(s);
+        }
+      } catch {}
+      state = legacy || seed();
+    }
+  } catch {
+    const id = uid();
+    profiles = [{ id, name: "Me" }];
+    currentId = id;
+    state = seed();
+  }
+  save();
+  saveProfiles();
 }
 
 /* ============================== Training plan ============================== */
@@ -377,10 +434,155 @@ const totalSets = (w) => w.exercises.reduce((a, e) => a + e.sets.length, 0);
 const totalVolume = (w) =>
   w.exercises.reduce((a, e) => a + e.sets.reduce((b, s) => b + s.reps * s.weight, 0), 0);
 
+/* ============================== Strava import ============================== */
+
+/* RFC-4180-ish CSV parser: handles quoted fields, embedded commas/newlines, "" escapes. */
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field); field = "";
+    } else if (c === "\n") {
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+/* Strava "Activity Type" → our sport, or null to skip (gym/walk/yoga/etc.).
+   Covers Strava's English and Danish exports. */
+const STRAVA_SPORTS = {
+  // English
+  "run": "run", "trail run": "run", "virtual run": "run", "treadmill run": "run",
+  "ride": "bike", "virtual ride": "bike", "mountain bike ride": "bike",
+  "gravel ride": "bike", "e-bike ride": "bike", "ebikeride": "bike", "velomobile": "bike",
+  "swim": "swim", "open water swim": "swim", "pool swim": "swim",
+  // Danish
+  "løb": "run", "trailløb": "run", "virtuelt løb": "run", "løbebånd": "run",
+  "cykling": "bike", "cykeltur": "bike", "virtuel cykling": "bike", "mountainbike": "bike",
+  "mountainbiketur": "bike", "gravelcykling": "bike", "elcykeltur": "bike",
+  "svømning": "swim", "åbentvandssvømning": "swim", "svøm": "swim",
+};
+
+/* English + Danish month abbreviations (first 3 letters) → month index. */
+const STRAVA_MONTHS = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, maj: 4, jun: 5, jul: 6,
+  aug: 7, sep: 8, oct: 9, okt: 9, nov: 10, dec: 11,
+};
+
+/* Robust date parse: handles Strava's English ("Jun 1, 2026, 6:00:00 AM")
+   and Danish ("9. jun. 2026, 17.09.50") formats. */
+function parseStravaDate(s) {
+  if (!s) return NaN;
+  s = String(s).trim();
+  const t = Date.parse(s);
+  if (!isNaN(t)) return t;
+  // Danish: "9. jun. 2026, 17.09.50" (time separated by . or :)
+  const m = s.match(/(\d{1,2})\.?\s*([A-Za-zæøåÆØÅ]+)\.?\s*(\d{4})[,\s]+(\d{1,2})[.:](\d{2})(?:[.:](\d{2}))?/);
+  if (m) {
+    const mon = STRAVA_MONTHS[m[2].toLowerCase().slice(0, 3)];
+    if (mon != null) {
+      return new Date(+m[3], mon, +m[1], +m[4], +m[5], +(m[6] || 0)).getTime();
+    }
+  }
+  return NaN;
+}
+
+function parseStravaCSV(text) {
+  const rows = parseCSV(text);
+  if (rows.length < 2) return { sessions: [], skipped: 0, total: 0 };
+  const header = rows[0].map((h) => h.trim());
+
+  // The bulk export repeats some column names ("Distance" in km AND in metres,
+  // "Elapsed Time" twice). Track every index per name so we can disambiguate.
+  const cols = {};
+  header.forEach((h, i) => { (cols[h] = cols[h] || []).push(i); });
+  // Match the first header (English or Danish) that exists; 'last' picks the
+  // final duplicate (e.g. Distance appears as km then metres).
+  const col = (names, which) => {
+    for (const n of names) {
+      if (cols[n]) return which === "last" ? cols[n][cols[n].length - 1] : cols[n][0];
+    }
+    return -1;
+  };
+
+  const iId = col(["Activity ID", "Aktivitets-id"]);
+  const iDate = col(["Activity Date", "Aktivitetsdato"]);
+  const iName = col(["Activity Name", "Aktivitetsnavn"]);
+  const iType = col(["Activity Type", "Aktivitetstype"]);
+  const iMoving = col(["Moving Time", "Tid i bevægelse"]);
+  const iElapsed = col(["Elapsed Time", "Varighed"]);
+  const iRPE = col(["Perceived Exertion", "Oplevet indsats"]);
+  const dFirst = col(["Distance"], "first"); // usually km (display units)
+  const dLast = col(["Distance"], "last");   // usually metres
+
+  const num = (v) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isNaN(n) ? NaN : n; };
+  const sessions = [];
+  let skipped = 0;
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.length < 3) continue;
+    const sport = STRAVA_SPORTS[(row[iType] || "").trim().toLowerCase()];
+    if (!sport) { skipped++; continue; }
+
+    const date = parseStravaDate(row[iDate]);
+    if (isNaN(date)) { skipped++; continue; }
+
+    let secs = num(row[iMoving]);
+    if (isNaN(secs) || secs <= 0) secs = num(row[iElapsed]);
+    secs = Math.round(secs || 0);
+
+    // Prefer the metres column /1000 when present (unit-unambiguous); else first col as km.
+    const dF = num(row[dFirst]);
+    const dL = dLast !== dFirst ? num(row[dLast]) : NaN;
+    let km;
+    if (!isNaN(dL) && (isNaN(dF) || dL > dF * 100)) km = dL / 1000;
+    else km = dF;
+    km = isNaN(km) ? 0 : Math.round(km * 100) / 100;
+
+    if (km <= 0 || secs <= 0) { skipped++; continue; }
+
+    let effort = 5;
+    if (iRPE >= 0) { const e = parseInt(row[iRPE], 10); if (e >= 1 && e <= 10) effort = e; }
+    const name = (iName >= 0 ? (row[iName] || "").trim() : "") || "Strava";
+
+    sessions.push({
+      id: uid(),
+      stravaId: iId >= 0 ? (row[iId] || "").trim() : "",
+      sport, date, distanceKM: km, durationSeconds: secs, effort, notes: name,
+    });
+  }
+  return { sessions, skipped, total: rows.length - 1 };
+}
+
+function importStravaSessions(parsed) {
+  const existing = new Set(state.cardio.filter((c) => c.stravaId).map((c) => c.stravaId));
+  let added = 0, dup = 0;
+  for (const s of parsed.sessions) {
+    if (s.stravaId && existing.has(s.stravaId)) { dup++; continue; }
+    state.cardio.push(s);
+    if (s.stravaId) existing.add(s.stravaId);
+    added++;
+  }
+  save();
+  return { added, dup };
+}
+
 /* ============================== Seed data ============================== */
 
 function seed() {
-  const daysAgo = (d) => Date.now() - d * DAY;
   const ex = (name, category, notes = "") => ({ id: uid(), name, category, notes });
 
   const exercises = [
@@ -419,41 +621,13 @@ function seed() {
       exercises: [wex("Bench Press", 3, 8, 50), wex("Barbell Row", 3, 10, 40), wex("Overhead Press", 3, 8, 30), wex("Pull-Up", 3, 6, 0)] },
   ];
 
-  const sample = JSON.parse(JSON.stringify(templates[0]));
-  sample.id = uid();
-  sample.date = daysAgo(4);
-  sample.durationSeconds = 2580;
-  sample.notes = "Felt strong. Squat moving well.";
-  sample.exercises.forEach((e) => {
-    e.id = uid();
-    e.sets.forEach((s) => { s.id = uid(); s.done = true; });
-  });
-
-  const cs = (sport, d, km, secs, effort, notes) =>
-    ({ id: uid(), sport, date: daysAgo(d), distanceKM: km, durationSeconds: secs, effort, notes });
-
-  const cardio = [
-    cs("run", 27, 16, 95 * 60, 6, "Long run, week 1 of base."),
-    cs("run", 25, 8, 46 * 60, 5, "Easy aerobic."),
-    cs("swim", 22, 1.5, 40 * 60, 5, "Endurance set."),
-    cs("run", 20, 12, 68 * 60, 6, "Progression run."),
-    cs("bike", 18, 35, 80 * 60, 5, "Sweet-spot intervals."),
-    cs("run", 16, 10, 57 * 60, 6, "Hilly route."),
-    cs("run", 13, 8, 47 * 60 + 30, 5, "Easy Zone 2."),
-    cs("run", 11, 6, 33 * 60, 7, "Hill repeats."),
-    cs("bike", 9, 28, 65 * 60, 4, "Steady spin."),
-    cs("run", 8, 12, 70 * 60, 6, "Long-ish run with a strong finish."),
-    cs("swim", 6, 1.2, 32 * 60, 5, "Drills + 8 × 50m."),
-    cs("run", 5, 5, 26 * 60 + 15, 8, "Parkrun effort!"),
-    cs("run", 2, 14, 83 * 60, 6, "Long run, felt strong."),
-    cs("run", 1, 4, 24 * 60, 3, "Recovery jog."),
-  ];
-
+  // Fresh profiles start with a clean slate — exercises, workout templates and
+  // the training plan, but no logged progress. Each person fills in their own.
   return {
     exercises,
     templates,
-    history: [sample],
-    cardio,
+    history: [],
+    cardio: [],
     plan: generatePlan(),
     planStartDate: PLAN_START_DEFAULT,
     planVersion: PLAN_VERSION,
@@ -496,8 +670,9 @@ function renderTabbar() {
 /* ============================== Render: Home ============================== */
 
 function renderHome() {
+  const hasData = state.cardio.length > 0 || state.history.length > 0;
   const score = readinessScore();
-  const hex = score >= 70 ? "#c7ff59" : score >= 40 ? "#ff9440" : "#ff5a5a";
+  const hex = !hasData ? "#8a8a98" : score >= 70 ? "#c7ff59" : score >= 40 ? "#ff9440" : "#ff5a5a";
   const C = (2 * Math.PI * 62).toFixed(1);
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -527,6 +702,10 @@ function renderHome() {
         <div class="screen-title">${greeting}</div>
         <div class="screen-sub">${fmtDateLong(Date.now())}</div>
       </div>
+      <button class="profile-chip" title="Switch profile" onclick="A.openProfiles()">
+        <span class="avatar">${esc((currentProfile().name || "?").slice(0, 1).toUpperCase())}</span>
+        <span class="pname">${esc(currentProfile().name)}</span>
+      </button>
     </div>
     <div class="stack">
       <div class="card">
@@ -552,13 +731,13 @@ function renderHome() {
               stroke-linecap="round" stroke-dasharray="${C}" stroke-dashoffset="${C}"
               transform="rotate(-90 75 75)"
               style="transition: stroke-dashoffset 1.2s cubic-bezier(.22,1,.36,1); filter: drop-shadow(0 0 9px ${hex}55)"/>
-            <text x="75" y="82" text-anchor="middle" class="ring-score">${score}</text>
+            <text x="75" y="82" text-anchor="middle" class="ring-score">${hasData ? score : "—"}</text>
             <text x="75" y="100" text-anchor="middle" class="ring-sub">/ 100</text>
           </svg>
           <div>
             <div class="eyebrow">Race Readiness</div>
-            <div class="ready-label" style="color:${hex}">${readinessLabel(score)}</div>
-            <div class="card-sub" style="line-height:1.5">${readinessAdvice(score)}</div>
+            <div class="ready-label" style="color:${hex}">${hasData ? readinessLabel(score) : "Ready when you are"}</div>
+            <div class="card-sub" style="line-height:1.5">${hasData ? readinessAdvice(score) : "Log a workout or import your Strava history to see your race readiness."}</div>
           </div>
         </div>
       </div>
@@ -597,7 +776,7 @@ function renderHome() {
   requestAnimationFrame(() =>
     setTimeout(() => {
       const el = $("#ringFg");
-      if (el) el.style.strokeDashoffset = (C * (1 - score / 100)).toFixed(1);
+      if (el) el.style.strokeDashoffset = (C * (1 - (hasData ? score : 0) / 100)).toFixed(1);
     }, 60)
   );
 }
@@ -747,7 +926,10 @@ function renderActivity() {
         <div class="screen-title">Activity</div>
         <div class="screen-sub">Everything you've logged, in one place</div>
       </div>
-      <button class="icon-btn" title="Log session" onclick="A.editCardio(null)">＋</button>
+      <div style="display:flex;gap:8px">
+        <button class="icon-btn" title="Import from Strava" onclick="A.openStravaImport()">⤓</button>
+        <button class="icon-btn" title="Log session" onclick="A.editCardio(null)">＋</button>
+      </div>
     </div>
     <div class="seg" style="margin-bottom:14px">
       <button class="${seg === "endurance" ? "on" : ""}" onclick="A.setActivitySeg('endurance')">Endurance</button>
@@ -911,6 +1093,99 @@ function openModal(html) {
 }
 function closeModal() {
   $("#overlay-root").innerHTML = "";
+}
+
+/* ---------- Profiles ---------- */
+
+function openProfiles() {
+  openModal(`
+    <div class="sheet-head">
+      <div class="sheet-title">Profiles</div>
+      <button class="icon-btn" title="New profile" onclick="A.newProfile()">＋</button>
+    </div>
+    <div class="card-sub" style="line-height:1.6">
+      Each profile keeps its own workouts, plan progress and history — saved only on
+      this device and never uploaded. Pick yours so your data stays separate from
+      anyone else who opens the app on this browser.
+    </div>
+    <div style="margin-top:10px">
+      ${profiles.map((p) => `
+        <div class="list-row">
+          <div class="grow" onclick="A.switchProfile('${p.id}')">
+            <div class="name">${esc(p.name)}${p.id === currentId ? ' · <span style="color:var(--accent)">active</span>' : ""}</div>
+          </div>
+          ${p.id === currentId ? `<button class="icon-btn" style="width:30px;height:30px;font-size:13px" title="Rename" onclick="A.renameProfile()">✎</button>` : ""}
+          ${profiles.length > 1 ? `<button class="icon-btn" style="width:30px;height:30px;font-size:13px" title="Delete" onclick="A.deleteProfile('${p.id}')">✕</button>` : ""}
+        </div>`).join("")}
+    </div>
+    <div class="divider"></div>
+    <button class="btn btn-danger" onclick="A.clearProgress()">Clear this profile's progress</button>
+    <div class="sheet-actions"><button class="btn btn-ghost" onclick="A.closeModal()">Done</button></div>`);
+}
+
+function switchProfile(id) {
+  if (id === currentId) { closeModal(); return; }
+  if (!profiles.some((p) => p.id === id)) return;
+  currentId = id;
+  state = readData(id) || seed();
+  ui.planWeek = null;
+  ui.tab = "home";
+  saveProfiles();
+  save();
+  closeModal();
+  render();
+}
+
+function newProfile() {
+  const name = (prompt("Name for the new profile:", "") || "").trim();
+  if (!name) return;
+  const id = uid();
+  profiles.push({ id, name });
+  currentId = id;
+  state = seed();
+  ui.planWeek = null;
+  ui.tab = "home";
+  saveProfiles();
+  save();
+  closeModal();
+  render();
+}
+
+function renameProfile() {
+  const p = currentProfile();
+  const name = (prompt("Rename profile:", p.name) || "").trim();
+  if (!name) return;
+  p.name = name;
+  saveProfiles();
+  openProfiles();
+}
+
+function deleteProfile(id) {
+  if (profiles.length <= 1) { alert("You need at least one profile."); return; }
+  const p = profiles.find((x) => x.id === id);
+  if (!p || !confirm(`Delete profile "${p.name}" and all of its data on this device? This can't be undone.`)) return;
+  localStorage.removeItem(dataKey(id));
+  profiles = profiles.filter((x) => x.id !== id);
+  if (currentId === id) {
+    currentId = profiles[0].id;
+    state = readData(currentId) || seed();
+    ui.planWeek = null;
+  }
+  saveProfiles();
+  save();
+  render();
+  openProfiles();
+}
+
+function clearProgress() {
+  if (!confirm("Clear this profile's runs, rides, swims and gym history? Your exercises and training plan are kept.")) return;
+  state.cardio = [];
+  state.history = [];
+  // reset plan check-offs too
+  state.plan.forEach((s) => (s.completed = false));
+  save();
+  closeModal();
+  render();
 }
 
 /* ---------- Exercise library ---------- */
@@ -1158,6 +1433,82 @@ function deleteCardio(id) {
   state.cardio = state.cardio.filter((x) => x.id !== id);
   save();
   render();
+}
+
+/* ---------- Strava import ---------- */
+
+let stravaParsed = null;
+
+function openStravaImport() {
+  stravaParsed = null;
+  openModal(`
+    <div class="sheet-title">Import from Strava</div>
+    <div class="card-sub" style="margin-top:8px;line-height:1.6">
+      In Strava: <b>Settings → My Account → Download or Delete Your Account → Request your archive</b>.
+      Strava emails you a ZIP within a few hours. Unzip it and choose <b>activities.csv</b> below.
+    </div>
+    <div class="card-sub" style="margin-top:8px;line-height:1.6">
+      Runs, rides and swims are imported; gym and other activities are skipped.
+      Re-importing anytime is safe — sessions you already have are detected and skipped.
+    </div>
+    <input class="input" type="file" id="strava-file" accept=".csv,text/csv"
+      style="margin-top:14px;padding:9px" onchange="A.stravaFile(event)">
+    <div id="strava-preview"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" onclick="A.closeModal()">Close</button>
+      <button class="btn btn-accent" id="strava-import-btn" disabled style="opacity:.4"
+        onclick="A.stravaDoImport()">Import</button>
+    </div>`);
+}
+
+function stravaFile(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  const host = $("#strava-preview");
+  const btn = $("#strava-import-btn");
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onerror = () => {
+    host.innerHTML = `<div class="empty-note" style="padding:18px">Couldn't read that file. Try again.</div>`;
+  };
+  reader.onload = () => {
+    try { stravaParsed = parseStravaCSV(String(reader.result)); }
+    catch (e) { stravaParsed = null; }
+
+    if (!stravaParsed || stravaParsed.sessions.length === 0) {
+      host.innerHTML = `<div class="empty-note" style="padding:18px">
+        No runs, rides or swims found. Make sure you picked Strava's <b>activities.csv</b>.</div>`;
+      if (btn) { btn.disabled = true; btn.style.opacity = ".4"; }
+      return;
+    }
+    const counts = {};
+    stravaParsed.sessions.forEach((s) => (counts[s.sport] = (counts[s.sport] || 0) + 1));
+    const existing = new Set(state.cardio.filter((c) => c.stravaId).map((c) => c.stravaId));
+    const fresh = stravaParsed.sessions.filter((s) => !s.stravaId || !existing.has(s.stravaId)).length;
+    const bits = [
+      counts.run ? `🏃 ${counts.run} runs` : "",
+      counts.bike ? `🚴 ${counts.bike} rides` : "",
+      counts.swim ? `🏊 ${counts.swim} swims` : "",
+    ].filter(Boolean).join(" · ");
+    host.innerHTML = `
+      <div class="card" style="margin-top:14px">
+        <div class="card-title">Found ${stravaParsed.sessions.length} sessions</div>
+        <div class="card-sub" style="margin-top:6px">${bits}</div>
+        <div class="card-sub" style="margin-top:8px;color:var(--accent);font-weight:700">
+          ${fresh} new${fresh !== stravaParsed.sessions.length ? ` · ${stravaParsed.sessions.length - fresh} already imported` : ""}</div>
+      </div>`;
+    if (btn) { btn.disabled = false; btn.style.opacity = "1"; }
+  };
+  reader.readAsText(file);
+}
+
+function stravaDoImport() {
+  if (!stravaParsed) return;
+  const res = importStravaSessions(stravaParsed);
+  stravaParsed = null;
+  closeModal();
+  ui.activitySeg = "endurance";
+  render();
+  alert(`Imported ${res.added} new session${res.added === 1 ? "" : "s"}${res.dup ? ` · ${res.dup} duplicate${res.dup === 1 ? "" : "s"} skipped` : ""}.`);
 }
 
 /* ---------- Workout detail ---------- */
@@ -1468,6 +1819,8 @@ function render() {
 window.A = {
   go(tab) { ui.tab = tab; $("#view").scrollTop = 0; render(); },
   closeModal,
+  // profiles
+  openProfiles, switchProfile, newProfile, renameProfile, deleteProfile, clearProgress,
   // plan
   selectWeek(w) { ui.planWeek = w; render(); },
   togglePlan(id) {
@@ -1482,6 +1835,7 @@ window.A = {
   // activity
   setActivitySeg(seg) { ui.activitySeg = seg; render(); },
   editCardio, cardioSport, saveCardio, deleteCardio, showWorkout, deleteWorkout,
+  openStravaImport, stravaFile, stravaDoImport,
   // trends
   setTrendExercise(name) { ui.trendExercise = name; render(); },
   // active workout
@@ -1491,6 +1845,5 @@ window.A = {
 
 /* ============================== Boot ============================== */
 
-state = load() || seed();
-save();
+initProfiles();
 render();
