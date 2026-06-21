@@ -152,211 +152,220 @@ function initProfiles() {
 }
 
 /* ============================== Training plan ============================== */
-/* The user's own 20-week hybrid marathon + strength program
-   ("marathon_hybrid_program.md"): 4 run days + 3 lift days per week.
-   Plan starts Monday 15 June 2026; race day Sunday 1 November 2026. */
+/* The user's detailed 20-week marathon program: 3 run + 3 strength + 1 rest per
+   week. BACK-SAFE — Wed "Legs + core" uses unilateral/supported moves (goblet
+   squat, split squat, step-up, hip thrust) instead of axially loading Squat/RDL,
+   until the chiropractor clears heavier spinal loading. Phases: Opbygning (home
+   gym, wks 1–9) → Specifik (traveling, bodyweight/band, 10–15) → Top (16–18) →
+   Nedtrapning (taper + race, 19–20). Working goal 3:45. Plan starts Mon 15 Jun
+   2026; race day Sun 1 Nov 2026. */
 
 const PLAN_START_DEFAULT = new Date(2026, 5, 15).getTime(); // Mon 15 Jun 2026
-const PLAN_VERSION = 2;
+const PLAN_VERSION = 3;
 
 function phase(week) {
-  if (week <= 6) return "Opbygning";
-  if (week <= 13) return "Udvikling";
-  if (week <= 18) return "Peak";
-  if (week <= 19) return "Taper";
-  return "Race";
+  if (week <= 9) return "Opbygning";
+  if (week <= 15) return "Specifik";
+  if (week <= 18) return "Top";
+  return "Nedtrapning";
 }
 
-const PHASE_COLORS = { Opbygning: "#5ce6b8", Udvikling: "#ff9440", Peak: "#ff5a5a", Taper: "#669eff", Race: "#c7ff59" };
+const PHASE_COLORS = { Opbygning: "#5ce6b8", Specifik: "#ff9440", Top: "#ff5a5a", Nedtrapning: "#669eff" };
 
-/* Weekly running volume targets (km) from the program */
-const WEEK_KM = [24, 27, 30, 22, 33, 36, 40, 30, 43, 46, 35, 49, 52, 55, 40, 57, 58, 42, 28, 8];
+/* Weekly running volume targets (km) */
+const WEEK_KM = [20, 23, 26, 22, 28, 32, 36, 30, 38, 38, 42, 34, 44, 48, 40, 50, 55, 38, 28, 12];
 
-const PUSH_FULL = "Bænkpres, incline DB press, skulder DB press, lateral raises, triceps pushdown, face pulls";
-const PULL_FULL = "Pull-ups/lat pulldown, rows, seated cable row, bicep curl, hammer curl, rear delt fly";
-const LEGS_FULL = "Squat, RDL, leg press, hip thrust, dead bug, bird-dog";
+/* Strength templates — home (full gym) and travel (bodyweight/band). */
+const PUSH_HOME = "Bænkpres 4x8, Incline DB press 3x10, Skulder DB press 3x10, Lateral raises 3x12, Triceps pushdown 3x12, Face pulls 3x15";
+const PULL_HOME = "Pull-ups/lat pulldown 4x8, Rows 3x10, Seated cable row 3x12, Bicep curl 3x12, Hammer curl 3x12, Rear delt fly 3x15";
+const LEGS_HOME = "Goblet squat 4x10, Bulgarian split squat 3x10/side, Step-up 3x10/side, Hip thrust 3x12, Dead bug 3x12, Bird-dog 3x10/side";
+const PUSH_TRAVEL = "Push-ups 4x12, Incline push-ups 3x12, Pike push-ups 3x10, Diamond push-ups 3x10, Dips 3x12, Band face pulls 3x15";
+const PULL_TRAVEL = "Pull-ups el. band rows 4x10, Inverted rows 3x10, Band bicep curl 3x12, Band rear delt fly 3x15";
+const LEGS_TRAVEL = "Goblet squat (rygsæk) 4x12, Bulgarian split squat 3x12/side, Step-up 3x12/side, Glute bridge 3x15, Dead bug 3x12, Bird-dog 3x10/side";
+const DL = " — deload: −1 sæt hver";
+const LT = " — let: −1 sæt hver";
 
 /* [day 1-7, sport, title, detail] per week */
 const PLAN_WEEKS = [
-  /* Uge 1 – 24 km */ [
-    [1, "strength", "Push", PUSH_FULL],
-    [2, "run", "Easy run · 5 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", LEGS_FULL],
-    [4, "run", "Intervaller", "400m repeats – 5 km total"],
+  /* Uge 1 – OPBYGNING · 20 km */ [
+    [1, "strength", "Push", PUSH_HOME],
+    [2, "run", "Easy run · 5 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core", LEGS_HOME],
+    [4, "run", "Intervaller", "400m x8 (jog 200m mellem) – ca. 7 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", PULL_FULL],
-    [7, "run", "Long run · 8 km", "Roligt og kontrolleret"],
+    [6, "strength", "Pull", PULL_HOME],
+    [7, "run", "Long run · 8 km", "Roligt og kontrolleret (5:50–6:15/km)"],
   ],
-  /* Uge 2 – 27 km */ [
-    [1, "strength", "Push", "Som uge 1 – forsøg lidt tungere"],
-    [2, "run", "Easy run · 6 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", "Som uge 1"],
-    [4, "run", "Intervaller", "Over/unders – 5 km total"],
+  /* Uge 2 – OPBYGNING · 23 km */ [
+    [1, "strength", "Push", PUSH_HOME],
+    [2, "run", "Easy run · 6 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core", LEGS_HOME],
+    [4, "run", "Intervaller", "600m x6 (jog 200m mellem) – ca. 8 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Som uge 1"],
-    [7, "run", "Long run · 10 km", "Roligt og kontrolleret"],
+    [6, "strength", "Pull", PULL_HOME],
+    [7, "run", "Long run · 9 km", "Roligt og kontrolleret (5:50–6:15/km)"],
   ],
-  /* Uge 3 – 30 km */ [
-    [1, "strength", "Push", "Progressiv belastning"],
-    [2, "run", "Easy run · 7 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", "Progressiv belastning"],
-    [4, "run", "Intervaller", "Korte intervaller – 6 km total"],
+  /* Uge 3 – OPBYGNING · 26 km */ [
+    [1, "strength", "Push", PUSH_HOME],
+    [2, "run", "Easy run · 7 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core", LEGS_HOME],
+    [4, "run", "Intervaller", "800m x6 (jog 300m mellem) – ca. 9 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Progressiv belastning"],
-    [7, "run", "Long run · 12 km", "Roligt og kontrolleret"],
+    [6, "strength", "Pull", PULL_HOME],
+    [7, "run", "Long run · 10 km", "Roligt og kontrolleret (5:50–6:15/km)"],
   ],
-  /* Uge 4 – DELOAD – 22 km */ [
-    [1, "strength", "Push (let)", "DELOAD: 60–70% af normal vægt"],
-    [2, "run", "Easy run · 5 km", "Easy-tempo"],
-    [3, "strength", "Legs + core (let)", "DELOAD: 60–70% af normal vægt"],
-    [4, "run", "Easy run · 5 km", "Easy-tempo"],
+  /* Uge 4 – OPBYGNING (deload) · 22 km */ [
+    [1, "strength", "Push (deload)", PUSH_HOME + DL],
+    [2, "run", "Easy run · 6 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (deload)", LEGS_HOME + DL],
+    [4, "run", "Rolig løb + stigninger", "7 km + 4x20 sek. stigninger"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull (let)", "DELOAD: 60–70% af normal vægt"],
-    [7, "run", "Long run · 8 km", "Roligt"],
+    [6, "strength", "Pull (deload)", PULL_HOME + DL],
+    [7, "run", "Long run · 9 km", "Roligt og kontrolleret (5:50–6:15/km)"],
   ],
-  /* Uge 5 – 33 km */ [
-    [1, "strength", "Push", "Progressiv belastning"],
-    [2, "run", "Easy run · 7 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", "Progressiv belastning"],
-    [4, "run", "Tempo", "2 km tempo-blokke – 7 km total"],
+  /* Uge 5 – OPBYGNING · 28 km */ [
+    [1, "strength", "Push", PUSH_HOME],
+    [2, "run", "Easy run · 8 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core", LEGS_HOME],
+    [4, "run", "Tempo", "2km opvarmning + 10 min @ 4:50–5:00/km + 2km nedkøling – ca. 9 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Progressiv belastning"],
-    [7, "run", "Long run · 14 km", "Roligt og kontrolleret"],
+    [6, "strength", "Pull", PULL_HOME],
+    [7, "run", "Long run · 11 km", "Roligt og kontrolleret (5:50–6:15/km)"],
   ],
-  /* Uge 6 – 36 km */ [
-    [1, "strength", "Push", "Progressiv belastning"],
-    [2, "run", "Easy run · 8 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", "Progressiv belastning"],
-    [4, "run", "Intervaller", "1 km repeats – 7 km total"],
+  /* Uge 6 – OPBYGNING · 32 km */ [
+    [1, "strength", "Push", PUSH_HOME],
+    [2, "run", "Easy run · 9 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core", LEGS_HOME],
+    [4, "run", "Tempo", "2km opvarmning + 15 min @ 4:50–5:00/km + 2km nedkøling – ca. 10 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Progressiv belastning"],
-    [7, "run", "Long run · 16 km", "Roligt og kontrolleret"],
+    [6, "strength", "Pull", PULL_HOME],
+    [7, "run", "Long run · 13 km", "Roligt og kontrolleret (5:50–6:15/km)"],
   ],
-  /* Uge 7 – 40 km */ [
-    [1, "strength", "Push", "Fuldt program"],
-    [2, "run", "Easy run · 8 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", "Fuldt program"],
-    [4, "run", "Tempo", "Drop set tempo – 8 km total"],
+  /* Uge 7 – OPBYGNING · 36 km */ [
+    [1, "strength", "Push", PUSH_HOME],
+    [2, "run", "Easy run · 10 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core", LEGS_HOME],
+    [4, "run", "Tempo", "2km opvarmning + 20 min @ 4:50–5:00/km + 2km nedkøling – ca. 12 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Fuldt program"],
+    [6, "strength", "Pull", PULL_HOME],
+    [7, "run", "Long run · 14 km", "Roligt og kontrolleret (5:50–6:15/km)"],
+  ],
+  /* Uge 8 – OPBYGNING (deload) · 30 km */ [
+    [1, "strength", "Push (deload)", PUSH_HOME + DL],
+    [2, "run", "Easy run · 9 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (deload)", LEGS_HOME + DL],
+    [4, "run", "Rolig løb + stigninger", "10 km + 4x20 sek. stigninger"],
+    [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
+    [6, "strength", "Pull (deload)", PULL_HOME + DL],
+    [7, "run", "Long run · 11 km", "Roligt og kontrolleret (5:50–6:15/km)"],
+  ],
+  /* Uge 9 – OPBYGNING · 38 km */ [
+    [1, "strength", "Push", "⚠ Kiropraktor-tjek før afgang denne uge. " + PUSH_HOME],
+    [2, "run", "Easy run · 10 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core", LEGS_HOME],
+    [4, "run", "Tempo", "2km opvarmning + 20 min @ 4:50–5:00/km + 2km nedkøling – ca. 12 km"],
+    [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
+    [6, "strength", "Pull", PULL_HOME],
+    [7, "run", "Long run · 16 km", "Roligt og kontrolleret (5:50–6:15/km)"],
+  ],
+  /* Uge 10 – SPECIFIK · 38 km (rejse starter) */ [
+    [1, "strength", "Push (rejse)", PUSH_TRAVEL],
+    [2, "run", "Easy run · 10 km", "Samtale-tempo — løb efter fornemmelse i varmen"],
+    [3, "strength", "Legs + core (rejse)", LEGS_TRAVEL],
+    [4, "run", "Rolig løb", "12 km — tilpas til varme/jetlag"],
+    [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
+    [6, "strength", "Pull (rejse)", PULL_TRAVEL],
+    [7, "run", "Long run · 16 km", "Roligt og kontrolleret — opdel ruten hvis nødvendigt"],
+  ],
+  /* Uge 11 – SPECIFIK · 42 km */ [
+    [1, "strength", "Push (rejse)", PUSH_TRAVEL],
+    [2, "run", "Easy run · 11 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (rejse)", LEGS_TRAVEL],
+    [4, "run", "Fartlek", "6 x 3 min hurtigt / 2 min roligt – ca. 13 km"],
+    [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
+    [6, "strength", "Pull (rejse)", PULL_TRAVEL],
     [7, "run", "Long run · 18 km", "Roligt og kontrolleret"],
   ],
-  /* Uge 8 – DELOAD – 30 km */ [
-    [1, "strength", "Push (let)", "DELOAD: 60–70%"],
-    [2, "run", "Easy run · 6 km", "Easy-tempo"],
-    [3, "strength", "Legs + core (let)", "DELOAD: 60–70%"],
-    [4, "run", "Intervaller", "Tempo 1200s – 6 km total"],
+  /* Uge 12 – SPECIFIK (deload/rejse-reset) · 34 km */ [
+    [1, "strength", "Push (rejse, deload)", PUSH_TRAVEL + DL],
+    [2, "run", "Easy run · 10 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (rejse, deload)", LEGS_TRAVEL + DL],
+    [4, "run", "Rolig løb", "10 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull (let)", "DELOAD: 60–70%"],
-    [7, "run", "Long run · 12 km", "Roligt. Begynd at teste gels på long runs"],
+    [6, "strength", "Pull (rejse, deload)", PULL_TRAVEL + DL],
+    [7, "run", "Long run · 14 km", "Roligt og kontrolleret"],
   ],
-  /* Uge 9 – 43 km */ [
-    [1, "strength", "Push", "Fuldt program"],
-    [2, "run", "Easy run · 9 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", "Fuldt program"],
-    [4, "run", "Intervaller", "Pyramid intervaller – 8 km total"],
+  /* Uge 13 – SPECIFIK · 44 km */ [
+    [1, "strength", "Push (rejse)", PUSH_TRAVEL],
+    [2, "run", "Easy run · 11 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (rejse)", LEGS_TRAVEL],
+    [4, "run", "MP-intervaller", "2km opvarmning + 3x10 min @ 5:10–5:25/km (jog 2 min mellem) + 2km nedkøling – ca. 13 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Fuldt program"],
-    [7, "run", "Long run · 20 km", "Roligt. Test gels undervejs"],
+    [6, "strength", "Pull (rejse)", PULL_TRAVEL],
+    [7, "run", "Long run · 20 km", "Roligt og kontrolleret"],
   ],
-  /* Uge 10 – 46 km */ [
-    [1, "strength", "Push", "Fuldt program"],
-    [2, "run", "Easy run · 9 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", "Fuldt program"],
-    [4, "run", "Tempo", "Mile up/overs – 9 km total"],
+  /* Uge 14 – SPECIFIK · 48 km */ [
+    [1, "strength", "Push (rejse)", PUSH_TRAVEL],
+    [2, "run", "Easy run · 12 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (rejse)", LEGS_TRAVEL],
+    [4, "run", "Tempo", "2km opvarmning + 25 min @ 4:50–5:00/km + 2km nedkøling – ca. 14 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Fuldt program"],
-    [7, "run", "Long run · 22 km", "Roligt. Kulhydrat-load aftenen før"],
+    [6, "strength", "Pull (rejse)", PULL_TRAVEL],
+    [7, "run", "Long run · 22 km", "Roligt og kontrolleret"],
   ],
-  /* Uge 11 – DELOAD – 35 km */ [
-    [1, "strength", "Push (let)", "DELOAD: 60–70%"],
-    [2, "run", "Easy run · 7 km", "Easy-tempo"],
-    [3, "strength", "Legs + core (let)", "DELOAD: 60–70%"],
-    [4, "run", "Easy run · 7 km", "Easy-tempo"],
+  /* Uge 15 – SPECIFIK (deload) · 40 km */ [
+    [1, "strength", "Push (rejse, deload)", PUSH_TRAVEL + DL],
+    [2, "run", "Easy run · 12 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (rejse, deload)", LEGS_TRAVEL + DL],
+    [4, "run", "Rolig løb", "12 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull (let)", "DELOAD: 60–70%"],
-    [7, "run", "Long run · 14 km", "Roligt"],
+    [6, "strength", "Pull (rejse, deload)", PULL_TRAVEL + DL],
+    [7, "run", "Long run · 16 km", "Roligt og kontrolleret"],
   ],
-  /* Uge 12 – 49 km */ [
-    [1, "strength", "Push", "Fuldt program"],
-    [2, "run", "Easy run · 9 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", "Fuldt program"],
-    [4, "run", "Intervaller", "2 km repeats – 9 km total"],
+  /* Uge 16 – TOP · 50 km */ [
+    [1, "strength", "Push (rejse)", "⚠ Kiropraktor-tjek før peak-load. " + PUSH_TRAVEL],
+    [2, "run", "Easy run · 11 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (rejse)", LEGS_TRAVEL],
+    [4, "run", "MP-intervaller", "2km opvarmning + 3x10 min @ 5:10–5:25/km + 2km nedkøling – ca. 13 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Fuldt program"],
-    [7, "run", "Long run · 24 km", "Roligt og kontrolleret"],
+    [6, "strength", "Pull (rejse)", PULL_TRAVEL],
+    [7, "run", "Long run · 26 km", "Roligt — sidste 5 km @ maratontempo (5:10–5:25/km)"],
   ],
-  /* Uge 13 – 52 km */ [
-    [1, "strength", "Push", "Fuldt program"],
-    [2, "run", "Easy run · 10 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core", "Fuldt program"],
-    [4, "run", "Tempo", "Half easy / half tempo – 10 km total"],
+  /* Uge 17 – TOP (længste uge) · 55 km */ [
+    [1, "strength", "Push (rejse)", PUSH_TRAVEL],
+    [2, "run", "Easy run · 12 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (rejse)", LEGS_TRAVEL],
+    [4, "run", "MP-intervaller", "2km opvarmning + 3x12 min @ 5:10–5:25/km + 2km nedkøling – ca. 14 km"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Fuldt program"],
-    [7, "run", "Long run · 25 km", "Roligt og kontrolleret"],
+    [6, "strength", "Pull (rejse)", PULL_TRAVEL],
+    [7, "run", "Long run · 29 km ⭐", "Længste løb. Roligt — sidste 8 km @ maratontempo (5:10–5:25/km)"],
   ],
-  /* Uge 14 – 55 km */ [
-    [1, "strength", "Push", "Fuldt program"],
-    [2, "run", "Easy run · 10 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core (reduceret)", "Kun 2 sæt per øvelse – benene er under pres fra long runs"],
-    [4, "run", "Intervaller", "Pyramid intervaller – 10 km total"],
+  /* Uge 18 – TOP→NEDTRAPNING · 38 km */ [
+    [1, "strength", "Push (rejse, let)", PUSH_TRAVEL + LT],
+    [2, "run", "Easy run · 10 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "strength", "Legs + core (rejse, let)", LEGS_TRAVEL + LT],
+    [4, "run", "Let løb + MP-berøring", "10 km, inkl. 4x3 min @ maratontempo"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Fuldt program"],
-    [7, "run", "Long run · 26 km", "Roligt og kontrolleret"],
+    [6, "strength", "Pull (rejse, let)", PULL_TRAVEL + LT],
+    [7, "run", "Long run · 18 km", "Roligt — sidste 3 km @ maratontempo"],
   ],
-  /* Uge 15 – DELOAD – 40 km */ [
-    [1, "strength", "Push (let)", "DELOAD: 60–70%"],
-    [2, "run", "Easy run · 8 km", "Easy-tempo"],
-    [3, "strength", "Legs + core (let)", "DELOAD: 60–70%"],
-    [4, "run", "Easy run · 7 km", "Easy-tempo"],
+  /* Uge 19 – NEDTRAPNING · 28 km (Legs+core på pause) */ [
+    [1, "strength", "Push (let)", "Samme øvelser som tidligere, −1 sæt hver"],
+    [2, "run", "Easy run · 8 km", "Samtale-tempo (5:55–6:20/km)"],
+    [3, "rest", "Hvile", "Ekstra restitution før taper — Legs + core på pause denne uge"],
+    [4, "run", "Let løb + skarphed", "8 km, inkl. 4x20 sek. @ maratontempo"],
     [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull (let)", "DELOAD: 60–70%"],
-    [7, "run", "Long run · 16 km", "Roligt"],
+    [6, "strength", "Pull (let)", "Samme øvelser som tidligere, −1 sæt hver"],
+    [7, "run", "Long run · 12 km", "Roligt og kontrolleret"],
   ],
-  /* Uge 16 – 57 km – Race simulation */ [
-    [1, "strength", "Push", "Fuldt program"],
-    [2, "run", "Easy run · 10 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core (reduceret)", "Kun 2 sæt per øvelse"],
-    [4, "run", "Tempo", "Race-tempo intervaller – 11 km total"],
-    [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Fuldt program"],
-    [7, "run", "Long run · 28 km ⭐", "RACE SIMULATION: test sko, gel-timing og tøj. Intet nyt på løbsdagen"],
-  ],
-  /* Uge 17 – 58 km */ [
-    [1, "strength", "Push", "Fuldt program"],
-    [2, "run", "Easy run · 10 km", "Samtale-tempo"],
-    [3, "strength", "Legs + core (reduceret)", "Kun 2 sæt per øvelse"],
-    [4, "run", "Intervaller", "2 km repeats – 11 km total"],
-    [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull", "Fuldt program"],
-    [7, "run", "Long run · 30 km", "Roligt og kontrolleret – længste tur i programmet"],
-  ],
-  /* Uge 18 – DELOAD – 42 km */ [
-    [1, "strength", "Push (let)", "DELOAD: 60–70%"],
-    [2, "run", "Easy run · 8 km", "Easy-tempo"],
-    [3, "strength", "Legs + core (let)", "DELOAD: 60–70%"],
-    [4, "run", "Easy run · 7 km", "Easy-tempo"],
-    [5, "rest", "Hvile", "Aktiv restitution eller total hvile"],
-    [6, "strength", "Pull (let)", "DELOAD: 60–70%"],
-    [7, "run", "Long run · 18 km", "Roligt"],
-  ],
-  /* Uge 19 – Taper – 28 km */ [
-    [1, "strength", "Push (let)", "Kun 2–3 sæt, let vægt"],
-    [2, "run", "Easy run · 6 km", "Samtale-tempo"],
-    [3, "rest", "Hvile / stretch", "Mobilitetsøvelser, foam rolling"],
-    [4, "run", "Intervaller", "Taper intervaller – 6 km total"],
-    [5, "rest", "Hvile", "Modstå trangen til at løbe mere"],
-    [6, "strength", "Pull (let)", "Kun 2–3 sæt, let vægt"],
-    [7, "run", "Long run · 12 km", "Roligt"],
-  ],
-  /* Uge 20 – LØBSUGE */ [
-    [1, "rest", "Hvile", "Total hvile"],
-    [2, "run", "Easy run · 5 km", "Meget roligt"],
+  /* Uge 20 – NEDTRAPNING · RACE WEEK */ [
+    [1, "strength", "Push (meget let)", "Samme øvelser, halvt volumen, kun let belastning"],
+    [2, "run", "Easy run · 5 km", "Samtale-tempo (5:55–6:20/km)"],
     [3, "rest", "Hvile", "Total hvile"],
-    [4, "run", "Let løbetur · 3 km", "Bare for at bevæge sig"],
-    [5, "rest", "Hvile", "Pak tasken, læg tøj frem"],
-    [6, "rest", "Hvile", "Tidlig middag med kulhydrater, tidlig sengetid"],
-    [7, "run", "🏁 MARATHON · 42,2 km", "Morgenmad 2–3 timer før start. Start roligere end du tror – første halvmarathon 10–15 sek/km langsommere end måltempo. Nyd det!"],
+    [4, "run", "Easy run · 4 km", "Inkl. 4x20 sek. stigninger"],
+    [5, "rest", "Hvile", "Total hvile"],
+    [6, "run", "Shakeout · 3 km", "Let jog + mobilitet, lige ud af benene"],
+    [7, "run", "🏁 RACE DAY — Marathon 42,2 km", "Maratontempo (5:10–5:25/km), start 30–60 sek/km langsommere de første 5 km. Nyd det!"],
   ],
 ];
 
@@ -796,7 +805,7 @@ function renderPlan() {
     <div class="view-head">
       <div>
         <div class="screen-title">Marathon Plan</div>
-        <div class="screen-sub">Din 20-ugers hybridplan · 4 løbedage + 3 styrkedage</div>
+        <div class="screen-sub">Din 20-ugers hybridplan · 3 løbedage + 3 styrkedage</div>
       </div>
       <button class="icon-btn" title="Plan settings" onclick="A.openPlanSettings()">⚙</button>
     </div>
