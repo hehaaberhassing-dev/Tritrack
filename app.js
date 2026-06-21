@@ -1450,25 +1450,148 @@ let stravaParsed = null;
 
 function openStravaImport() {
   stravaParsed = null;
+  const cfg = state.strava || {};
+  const connected = !!(cfg.workerUrl && cfg.session);
+  const lastSync = cfg.lastSync ? new Date(cfg.lastSync * 1000).toLocaleString() : "—";
   openModal(`
-    <div class="sheet-title">Import from Strava</div>
-    <div class="card-sub" style="margin-top:8px;line-height:1.6">
-      In the Strava app or website: <b>Settings → My Account → Download or Delete Your
-      Account → Request your archive</b>. Strava emails you a ZIP within a few hours.
-    </div>
-    <div class="card-sub" style="margin-top:8px;line-height:1.6">
-      Then just pick that <b>ZIP file</b> below — no need to unzip it first. Runs, rides
-      and swims are imported; everything else is skipped. Re-importing anytime is safe —
-      sessions you already have are detected and skipped.
+    <div class="sheet-title">Strava</div>
+
+    <div class="field-label">Automatic sync</div>
+    ${connected ? `
+      <div class="card" style="margin-top:2px">
+        <div class="card-title" style="color:var(--accent)">✓ Connected</div>
+        <div class="card-sub" style="margin-top:4px">Last synced: ${esc(lastSync)}</div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-accent btn-sm" style="flex:1" onclick="A.stravaSyncNow()">Sync now</button>
+          <button class="btn btn-ghost btn-sm" style="flex:1" onclick="A.stravaDisconnect()">Disconnect</button>
+        </div>
+      </div>
+    ` : `
+      <div class="card-sub" style="line-height:1.6">
+        Pulls new runs in automatically. One-time setup: follow <b>STRAVA-SETUP.md</b>
+        to create your free Strava app + backend, then paste your backend URL here.
+      </div>
+      <input class="input" id="strava-worker" placeholder="https://tritrack-strava.<navn>.workers.dev"
+        value="${esc(cfg.workerUrl || "")}" style="margin-top:10px">
+      <button class="btn btn-accent" style="margin-top:10px" onclick="A.stravaConnect()">Connect Strava</button>
+    `}
+
+    <div class="divider"></div>
+
+    <div class="field-label">Or import a file</div>
+    <div class="card-sub" style="line-height:1.6">
+      Pick the <b>ZIP</b> Strava emailed you (Settings → My Account → Download or Delete
+      Your Account). No need to unzip — re-importing is always safe.
     </div>
     <input class="input" type="file" id="strava-file" accept=".zip,.csv,application/zip,text/csv"
-      style="margin-top:14px;padding:9px" onchange="A.stravaFile(event)">
+      style="margin-top:10px;padding:9px" onchange="A.stravaFile(event)">
     <div id="strava-preview"></div>
     <div class="sheet-actions">
       <button class="btn btn-ghost" onclick="A.closeModal()">Close</button>
       <button class="btn btn-accent" id="strava-import-btn" disabled style="opacity:.4"
         onclick="A.stravaDoImport()">Import</button>
     </div>`);
+}
+
+/* ---------- Strava automatic sync (via the Cloudflare Worker backend) ---------- */
+
+function stravaConnect() {
+  const input = $("#strava-worker");
+  const workerUrl = (input ? input.value : "").trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//.test(workerUrl)) {
+    alert("Paste your backend URL first (it starts with https:// and ends in .workers.dev).");
+    return;
+  }
+  state.strava = state.strava || {};
+  state.strava.workerUrl = workerUrl;
+  save();
+  const back = location.origin + location.pathname;
+  location.href = workerUrl + "/auth?origin=" + encodeURIComponent(back);
+}
+
+function stravaDisconnect() {
+  if (!confirm("Disconnect Strava? Already-synced runs stay; new ones just won't come in automatically.")) return;
+  if (state.strava) { delete state.strava.session; delete state.strava.lastSync; }
+  save();
+  openStravaImport();
+}
+
+function stravaSyncNow() { stravaSync(false); }
+
+/* Strava API type/sport_type ("Run","TrailRun","Ride","Swim"…) → our sport */
+function apiSport(t) {
+  t = (t || "").toLowerCase();
+  if (t.includes("run")) return "run";
+  if (t.includes("ride") || t.includes("bike") || t.includes("cycl") || t.includes("velomobile")) return "bike";
+  if (t.includes("swim")) return "swim";
+  return null;
+}
+
+function stravaApiToSession(a) {
+  const sport = apiSport(a.sport_type || a.type);
+  if (!sport) return null;
+  const km = Math.round((a.distance / 1000) * 100) / 100;
+  const secs = a.moving_time || a.elapsed_time || 0;
+  if (km <= 0 || secs <= 0) return null;
+  const rpe = a.perceived_exertion;
+  return {
+    id: uid(),
+    stravaId: String(a.id),
+    sport,
+    date: Date.parse(a.start_date) || Date.now(),
+    distanceKM: km,
+    durationSeconds: secs,
+    effort: rpe >= 1 && rpe <= 10 ? rpe : 5,
+    notes: a.name || "Strava",
+  };
+}
+
+async function stravaSync(silent) {
+  const cfg = state.strava;
+  if (!cfg || !cfg.workerUrl || !cfg.session) {
+    if (!silent) alert("Not connected to Strava yet.");
+    return;
+  }
+  // small look-back so late-uploaded runs aren't missed; duplicates are ignored
+  const after = cfg.lastSync ? Math.max(0, cfg.lastSync - 2 * 86400) : 0;
+  try {
+    const u = cfg.workerUrl.replace(/\/+$/, "") +
+      "/activities?session=" + encodeURIComponent(cfg.session) + "&after=" + after;
+    const res = await fetch(u);
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !Array.isArray(data)) {
+      throw new Error((data && data.error) || ("HTTP " + res.status));
+    }
+    const sessions = data.map(stravaApiToSession).filter(Boolean);
+    const result = importStravaSessions({ sessions });
+    cfg.lastSync = Math.floor(Date.now() / 1000);
+    save();
+    render();
+    if (!silent) {
+      alert("Synced — " + result.added + " new activit" + (result.added === 1 ? "y" : "ies") +
+        (result.dup ? " (" + result.dup + " already had)" : "") + ".");
+    }
+  } catch (e) {
+    if (!silent) alert("Couldn't sync with Strava: " + e.message + ".\nCheck your backend URL and STRAVA-SETUP.md.");
+  }
+}
+
+/* On returning from the Strava authorize redirect (#strava_session=…) */
+function handleStravaRedirect() {
+  const m = (location.hash || "").match(/strava_session=([A-Za-z0-9_-]+)/);
+  if (!m) return false;
+  state.strava = state.strava || {};
+  state.strava.session = m[1];
+  state.strava.lastSync = 0; // first sync pulls full history
+  save();
+  history.replaceState(null, "", location.pathname + location.search);
+  setTimeout(() => stravaSync(false), 200);
+  return true;
+}
+
+function stravaAutoSync() {
+  const cfg = state.strava;
+  if (cfg && cfg.workerUrl && cfg.session) stravaSync(true);
 }
 
 /* Pull a named file out of a .zip in the browser — no library. Reads the central
@@ -1915,6 +2038,7 @@ window.A = {
   setActivitySeg(seg) { ui.activitySeg = seg; render(); },
   editCardio, cardioSport, saveCardio, deleteCardio, showWorkout, deleteWorkout,
   openStravaImport, stravaFile, stravaDoImport,
+  stravaConnect, stravaDisconnect, stravaSyncNow,
   // trends
   setTrendExercise(name) { ui.trendExercise = name; render(); },
   // active workout
@@ -1925,4 +2049,6 @@ window.A = {
 /* ============================== Boot ============================== */
 
 initProfiles();
+const fromStravaRedirect = handleStravaRedirect();
 render();
+if (!fromStravaRedirect) stravaAutoSync();
