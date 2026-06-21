@@ -1453,14 +1453,15 @@ function openStravaImport() {
   openModal(`
     <div class="sheet-title">Import from Strava</div>
     <div class="card-sub" style="margin-top:8px;line-height:1.6">
-      In Strava: <b>Settings → My Account → Download or Delete Your Account → Request your archive</b>.
-      Strava emails you a ZIP within a few hours. Unzip it and choose <b>activities.csv</b> below.
+      In the Strava app or website: <b>Settings → My Account → Download or Delete Your
+      Account → Request your archive</b>. Strava emails you a ZIP within a few hours.
     </div>
     <div class="card-sub" style="margin-top:8px;line-height:1.6">
-      Runs, rides and swims are imported; gym and other activities are skipped.
-      Re-importing anytime is safe — sessions you already have are detected and skipped.
+      Then just pick that <b>ZIP file</b> below — no need to unzip it first. Runs, rides
+      and swims are imported; everything else is skipped. Re-importing anytime is safe —
+      sessions you already have are detected and skipped.
     </div>
-    <input class="input" type="file" id="strava-file" accept=".csv,text/csv"
+    <input class="input" type="file" id="strava-file" accept=".zip,.csv,application/zip,text/csv"
       style="margin-top:14px;padding:9px" onchange="A.stravaFile(event)">
     <div id="strava-preview"></div>
     <div class="sheet-actions">
@@ -1470,44 +1471,113 @@ function openStravaImport() {
     </div>`);
 }
 
+/* Pull a named file out of a .zip in the browser — no library. Reads the central
+   directory, then inflates the entry with the built-in DecompressionStream. */
+async function extractFromZip(buffer, wantedName) {
+  const dv = new DataView(buffer);
+  const u8 = new Uint8Array(buffer);
+  const n = dv.byteLength;
+  const names = new TextDecoder();
+  // Find End Of Central Directory record (may be followed by a comment).
+  let eocd = -1;
+  for (let i = n - 22; i >= Math.max(0, n - 22 - 65536); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("not a valid zip");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  let found = null;
+  for (let i = 0; i < count && p + 46 <= n; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true);
+    const compSize = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true);
+    const extraLen = dv.getUint16(p + 30, true);
+    const commentLen = dv.getUint16(p + 32, true);
+    const localOff = dv.getUint32(p + 42, true);
+    const name = names.decode(u8.subarray(p + 46, p + 46 + nameLen)).toLowerCase();
+    if (name.endsWith(wantedName)) {
+      found = { method, compSize, localOff };
+      if (name === wantedName) break; // prefer the file at the zip root
+    }
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  if (!found) throw new Error(wantedName + " not found in the zip");
+  const lh = found.localOff;
+  if (dv.getUint32(lh, true) !== 0x04034b50) throw new Error("bad zip entry");
+  const dataStart = lh + 30 + dv.getUint16(lh + 26, true) + dv.getUint16(lh + 28, true);
+  const comp = u8.subarray(dataStart, dataStart + found.compSize);
+  let raw;
+  if (found.method === 0) {
+    raw = comp; // stored, no compression
+  } else if (found.method === 8) {
+    if (typeof DecompressionStream === "undefined") {
+      throw new Error("this browser can't open zips — unzip it and pick activities.csv");
+    }
+    const stream = new Blob([comp]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    raw = new Uint8Array(await new Response(stream).arrayBuffer());
+  } else {
+    throw new Error("unsupported zip compression");
+  }
+  return new TextDecoder("utf-8").decode(raw);
+}
+
+/* Accept either Strava's whole .zip archive or a bare activities.csv. */
+async function readStravaFile(file) {
+  const buffer = await file.arrayBuffer();
+  const u8 = new Uint8Array(buffer);
+  const isZip = u8[0] === 0x50 && u8[1] === 0x4b; // "PK" magic
+  if (isZip) return await extractFromZip(buffer, "activities.csv");
+  return new TextDecoder("utf-8").decode(u8);
+}
+
+function stravaShowPreview() {
+  const host = $("#strava-preview");
+  const btn = $("#strava-import-btn");
+  if (!host) return;
+  if (!stravaParsed || stravaParsed.sessions.length === 0) {
+    host.innerHTML = `<div class="empty-note" style="padding:18px">
+      No runs, rides or swims found in that file. Pick the <b>ZIP</b> Strava emailed you
+      (or its <b>activities.csv</b>).</div>`;
+    if (btn) { btn.disabled = true; btn.style.opacity = ".4"; }
+    return;
+  }
+  const counts = {};
+  stravaParsed.sessions.forEach((s) => (counts[s.sport] = (counts[s.sport] || 0) + 1));
+  const existing = new Set(state.cardio.filter((c) => c.stravaId).map((c) => c.stravaId));
+  const fresh = stravaParsed.sessions.filter((s) => !s.stravaId || !existing.has(s.stravaId)).length;
+  const bits = [
+    counts.run ? `🏃 ${counts.run} runs` : "",
+    counts.bike ? `🚴 ${counts.bike} rides` : "",
+    counts.swim ? `🏊 ${counts.swim} swims` : "",
+  ].filter(Boolean).join(" · ");
+  host.innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="card-title">Found ${stravaParsed.sessions.length} sessions</div>
+      <div class="card-sub" style="margin-top:6px">${bits}</div>
+      <div class="card-sub" style="margin-top:8px;color:var(--accent);font-weight:700">
+        ${fresh} new${fresh !== stravaParsed.sessions.length ? ` · ${stravaParsed.sessions.length - fresh} already imported` : ""}</div>
+    </div>`;
+  if (btn) { btn.disabled = false; btn.style.opacity = "1"; }
+}
+
 function stravaFile(ev) {
   const file = ev.target.files && ev.target.files[0];
   const host = $("#strava-preview");
   const btn = $("#strava-import-btn");
   if (!file) return;
-  const reader = new FileReader();
-  reader.onerror = () => {
-    host.innerHTML = `<div class="empty-note" style="padding:18px">Couldn't read that file. Try again.</div>`;
-  };
-  reader.onload = () => {
-    try { stravaParsed = parseStravaCSV(String(reader.result)); }
-    catch (e) { stravaParsed = null; }
-
-    if (!stravaParsed || stravaParsed.sessions.length === 0) {
-      host.innerHTML = `<div class="empty-note" style="padding:18px">
-        No runs, rides or swims found. Make sure you picked Strava's <b>activities.csv</b>.</div>`;
+  if (host) host.innerHTML = `<div class="card-sub" style="margin-top:14px">Reading ${esc(file.name)}…</div>`;
+  readStravaFile(file)
+    .then((text) => {
+      try { stravaParsed = parseStravaCSV(text); }
+      catch (e) { stravaParsed = null; }
+      stravaShowPreview();
+    })
+    .catch((err) => {
+      stravaParsed = null;
+      if (host) host.innerHTML = `<div class="empty-note" style="padding:18px">Couldn't read that file (${esc(err.message)}). Pick the <b>ZIP</b> Strava emailed you, or its <b>activities.csv</b>.</div>`;
       if (btn) { btn.disabled = true; btn.style.opacity = ".4"; }
-      return;
-    }
-    const counts = {};
-    stravaParsed.sessions.forEach((s) => (counts[s.sport] = (counts[s.sport] || 0) + 1));
-    const existing = new Set(state.cardio.filter((c) => c.stravaId).map((c) => c.stravaId));
-    const fresh = stravaParsed.sessions.filter((s) => !s.stravaId || !existing.has(s.stravaId)).length;
-    const bits = [
-      counts.run ? `🏃 ${counts.run} runs` : "",
-      counts.bike ? `🚴 ${counts.bike} rides` : "",
-      counts.swim ? `🏊 ${counts.swim} swims` : "",
-    ].filter(Boolean).join(" · ");
-    host.innerHTML = `
-      <div class="card" style="margin-top:14px">
-        <div class="card-title">Found ${stravaParsed.sessions.length} sessions</div>
-        <div class="card-sub" style="margin-top:6px">${bits}</div>
-        <div class="card-sub" style="margin-top:8px;color:var(--accent);font-weight:700">
-          ${fresh} new${fresh !== stravaParsed.sessions.length ? ` · ${stravaParsed.sessions.length - fresh} already imported` : ""}</div>
-      </div>`;
-    if (btn) { btn.disabled = false; btn.style.opacity = "1"; }
-  };
-  reader.readAsText(file);
+    });
 }
 
 function stravaDoImport() {
